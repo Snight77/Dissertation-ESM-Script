@@ -1,0 +1,664 @@
+---
+title: "Tarun's Dissertation ESM Script"
+author: "Tarun Vermani MSc"
+date: "2022-08-16"
+output: html_document
+---
+
+```{r}
+##Necessary Packages 
+library('dplyr', quietly = TRUE)
+library('lmerTest', quietly = TRUE)
+library('magrittr', quietly = TRUE)
+library('dplyr', quietly = TRUE)
+library('lme4', quietly = TRUE)
+library('esmpack', quietly = TRUE)
+library('lattice', quietly = TRUE)
+library('latticeExtra', quietly = TRUE)
+library('ggplot2', quietly = TRUE)
+library('readr', quietly = TRUE)
+library('scales', quietly = TRUE)
+setwd("C:/Users/Vermani/Desktop/Coursera")
+```
+
+###For replication set WD here and run outside of the chunk.
+setwd("")
+
+```{r}
+beep <- read.csv("CIAR_BE.csv")
+
+demog <- read.csv("CIAR_DEMOG.csv")[-1,]
+
+asa <- read.csv("CIAR_ASA.csv")[-1,]
+
+mfq <- read.csv("CIAR_MFQ.csv")[-1,]
+
+debrief <- read.csv("CIAR_DEBR.csv")[-1,]
+
+
+
+full.df <- data.frame(
+  
+  dayno = rep(rep(c("0", "1", "2", "3", "4", "5"), each = 7), times = length(unique(beep$st_subjid))),
+  
+  pm_ref_label = rep(c("beep1", "beep2", "beep3", "beep4", "beep5", "beep6", "beep7"), times =
+                       
+                       length(rep(rep(c("0", "1", "2", "3", "4", "5"), each = 7), times = length(unique(beep$st_subjid))))/7),
+  
+  st_subjid = rep(unique(beep$st_subjid), each = 42)
+  
+)
+
+full.df$dayno <- as.numeric(full.df$dayno) 
+
+
+lag.df <- full.df %>% left_join(beep, by = c("st_subjid", "dayno", "pm_ref_label"))
+
+final.beep <- lag.df
+
+## This has created the DF with filled in missing NA rows 
+```
+
+```{r}
+##Adding demo info 
+
+asa$asa_tot <- rowSums(asa[,21:34], na.rm = T)
+
+mfq$mfq_tot <- rowSums(mfq[, 21:52], na.rm = T)
+
+for(i in 1:nrow(final.beep)){ 
+  
+  if(final.beep$st_subjid[i] %in% asa$st_subjid){
+  final.beep$asa_tot[i] <- asa[asa$st_subjid == final.beep$st_subjid[i] , "asa_tot"]
+  } else{
+    final.beep$asa_tot[i] <- NA
+  }
+  
+  if(final.beep$st_subjid[i] %in% mfq$st_subjid){
+    final.beep$mfq_tot[i] <- mfq[mfq$st_subjid == final.beep$st_subjid[i] , "mfq_tot"]
+  } else{
+    final.beep$mfq_tot[i] <- NA
+  }
+  if(final.beep$st_subjid[i] %in% demog$st_subjid){
+    final.beep$gender[i] <- demog[demog$st_subjid == final.beep$st_subjid[i] , "ciar_demog2"]
+     final.beep$age[i] <- demog[demog$st_subjid ==  final.beep$st_subjid[i] , "ciar_demog1"]
+    final.beep$ethnicity[i] <- demog[demog$st_subjid == final.beep$st_subjid[i] , "ciar_demog3"]
+    
+    final.beep$med_status[i] <- demog[demog$st_subjid == final.beep$st_subjid[i] , "ciar_demog4"]
+  
+  } else{
+    final.beep$gender[i] <- NA
+    final.beep$ethnicity[i] <- NA
+    final.beep$med_status[i] <- NA
+    final.beep$age[i] <- NA
+  }
+}
+  
+  
+```
+
+
+```{r}
+##Importing missing demo-data from JISC into workspace
+non.app.esm <- read.csv("esm_survey.csv")
+
+## Clinical data from JISC Survey.
+
+# ASA score.
+for(n in 42:55){
+ 
+  for(i in 1:(nrow(non.app.esm))){
+   
+    if(non.app.esm[i, n] == "Never."){
+  non.app.esm[i, n] <- 0
+ 
+} else if(non.app.esm[i, n] == "Sometimes."){
+  non.app.esm[i, n] <- 1
+ 
+} else if(non.app.esm[i, n] == "Often."){
+  non.app.esm[i, n] <- 2
+ 
+} else if(non.app.esm[i, n] == "Always."){
+  non.app.esm[i, n] <- 3
+ 
+}
+  }
+  non.app.esm[,n] <- as.numeric(non.app.esm[,n])
+}
+
+non.app.esm$asa_tot <- rowSums(non.app.esm[, 42:55])
+
+
+# MFQ score.
+for(n in 9:41){
+ 
+  for(i in 1:(nrow(non.app.esm))){
+
+if(non.app.esm[i, n] == "Not True."){
+  non.app.esm[i, n] <- 0
+ 
+} else if(non.app.esm[i, n] == "Sometimes."){
+  non.app.esm[i, n] <- 1
+ 
+} else if(non.app.esm[i, n] == "True."){
+  non.app.esm[i, n] <- 2
+ 
+}
+  }
+  non.app.esm[,n] <- as.numeric(non.app.esm[,n])
+}
+
+non.app.esm$mfq_tot <- rowSums(non.app.esm[, 9:41])
+
+
+# Merging on email_id
+
+emails <- read.csv("Participants.csv")
+
+
+participants.final <- final.beep
+
+
+email_short <- emails %>%
+  select(st_subjid, email)
+  
+participants.final <- participants.final %>%
+  left_join(email_short, by = "st_subjid")
+
+```
+
+
+
+```{r}
+# Adding to participants.final 
+participants.final$dep_med <- NA
+
+for(i in 1:nrow(non.app.esm)){
+ 
+  x <- grep(non.app.esm$X3..E.mail[i], participants.final$email)
+ 
+  participants.final$asa_tot[x] <- non.app.esm[non.app.esm$X3..E.mail == non.app.esm$X3..E.mail[i], "asa_tot"]
+ 
+  participants.final$mfq_tot[x] <- non.app.esm[non.app.esm$X3..E.mail == non.app.esm$X3..E.mail[i], "mfq_tot"]
+ 
+  participants.final$age[x] <- non.app.esm[non.app.esm$X3..E.mail == non.app.esm$X3..E.mail[i], 5]
+ 
+  participants.final$gender[x] <- tolower(non.app.esm[non.app.esm$X3..E.mail == non.app.esm$X3..E.mail[i], 6])
+ 
+  participants.final$ethnicity[x] <- tolower(non.app.esm[non.app.esm$X3..E.mail == non.app.esm$X3..E.mail[i], 7])
+ participants.final$dep_med[x] <- ifelse(non.app.esm[non.app.esm$X3..E.mail == non.app.esm$X3..E.mail[i], 8] == "No", " ", "yes; not contraception")
+ 
+}
+
+
+```
+
+```{r}
+##Data-cleaning - removing data with compliance < 30% 
+
+final.beep <- participants.final
+
+final.beep$gender <- as.numeric(final.beep$gender)
+final.beep$ethnicity <- as.numeric(final.beep$ethnicity)
+
+
+demo_table <- final.beep %>%
+  group_by(st_subjid) %>%
+  summarize(asa = mean(asa_tot, na.rm = T), 
+            age = mean(age, na.rm = T), 
+            mfq = mean(mfq_tot, na.rm = T), 
+            medication_status = mean(med_status, na.rm = T), 
+            gender = median(gender, na.rm = T),
+            compliance = sum(!is.na(st_name))) %>%
+            mutate(percentage = round(`compliance` / 42 * 100, 1)) 
+      
+
+
+demo_new <- demo_table[demo_table$percentage > 30,]
+
+# Filters by compliance 
+final.beep <- final.beep %>%
+  filter(final.beep$st_subjid %in% demo_new$st_subjid)
+
+
+
+#renaming columns using vectors
+
+oldnames = c("ciar_be001", "ciar_be002", "ciar_be003", "ciar_be004", "ciar_be005",
+"ciar_be006", "ciar_be007", "ciar_be008", "ciar_be009", "ciar_be010", 
+"ciar_be011", "ciar_be012a", "ciar_be012b", "ciar_be013", "ciar_be014", "ciar_be015", "ciar_be016", "ciar_be017", "ciar_be018", "ciar_be019", "ciar_be020", "ciar_be021", "ciar_be022")
+
+newnames = c("Cheerful", "Ashamed", "Annoyed", "Enthusiastic", "Relaxed", "Anxious",
+"Satisfied", "Lonely", "Insecure", "Down", "Guilty", "What", "Soc_media", 
+"Act_enjoy", "Who", "Who_enjoy", "Act_future", "Anticipation", "interest",
+"Something_else", "Chance", "Who_future", "Who_future_enjoy")
+
+
+final.beep <- final.beep %>% 
+  rename_at(vars(oldnames), ~ newnames)
+
+#Replacing unfilled data with NA (this does not turn the whole row NA, only the specific observation that is missing e.g. Act_enjoy)
+
+test_na <- final.beep %>%
+   mutate(across(21:31, ~ na_if(.x, 9)))
+test_na <- test_na %>%
+   mutate(across(31, ~ na_if(.x, 99)))
+test_na <- test_na %>%
+   mutate(across(37, ~ na_if(.x, 99)))
+test_na <- test_na %>%
+   mutate(across(33:36, ~ na_if(.x, 9)))
+test_na <- test_na %>%
+   mutate(across(38:40, ~ na_if(.x, 9)))
+test_na <- test_na %>%
+   mutate(across(32:43, ~ na_if(.x, 9)))
+
+test_na_count <- sum(is.na(final.beep$Act_enjoy))
+
+# A visual check of data with incorrect values (obs size should be 0)
+check.df <- test_na %>%
+  filter(Guilty > 7 | Who_future_enjoy > 8)
+
+#Parsing back into final.beep
+
+final.beep <- test_na
+
+demo_table_filtered <- final.beep %>%
+  group_by(st_subjid) %>%
+  summarize(asa = mean(asa_tot, na.rm = T), 
+            age = mean(age, na.rm = T), 
+            mfq = mean(mfq_tot, na.rm = T), 
+            medication_status = mean(med_status, na.rm = T), 
+            gender = median(gender, na.rm = T),
+            ethnicity = median(ethnicity, na.rm = T),
+            compliance = sum(!is.na(st_name))) %>%
+            mutate(percentage = round(`compliance` / 42 * 100, 1)) 
+
+compliance <- demo_table_filtered %>%
+  summarize(percent_mean = mean(percentage))
+
+ethnicity.tab <- demo_table_filtered %>%
+ select(ethnicity) %>%
+  summarise((ethnicity = sum(ethnicity)))
+
+
+```
+
+```{r}
+##creation of composite variables for mood
+
+#Reverse coding pos mood
+
+final.beep <- final.beep %>%
+  mutate(CheerfulR = (8-Cheerful)) %>% 
+  mutate(EnthusiasticR = (8-Enthusiastic)) %>%
+  mutate(RelaxedR = (8-Relaxed)) %>% 
+  mutate(SatisfiedR = (8-Satisfied))
+
+final.beep <- final.beep %>%
+  mutate(tot_pos = (Cheerful + Enthusiastic +  Relaxed + Satisfied), na.rm = TRUE) 
+
+final.beep <- final.beep %>%
+  mutate(tot_neg = (Ashamed + Annoyed + Anxious + Lonely + Insecure + Down + Guilty), na.rm = TRUE)
+
+#Cumulative mood largely ignored in favour of cumulative mean (which takes the mean of positive and negative instead of summing)
+
+final.beep <- final.beep %>%
+mutate(cumu_mood = (Ashamed + Annoyed + Anxious + Lonely + Insecure + Down + Guilty + CheerfulR + EnthusiasticR + RelaxedR + SatisfiedR), na.rm = TRUE)
+
+
+#removing na's before calculating row affect means
+
+neg_name <- c("Ashamed", "Annoyed", "Anxious", "Lonely", "Insecure", "Down", "Guilty")
+pos_name <- c("Cheerful", "Enthusiastic", "Relaxed", "Satisfied")
+cumu_name <- c("Ashamed", "Annoyed", "Anxious", "Lonely", "Insecure", "Down", "Guilty", "CheerfulR", "EnthusiasticR", "RelaxedR", "SatisfiedR")
+
+#Counts NA's in relevant rows to calculate the correct mean e.g. if 1 positive obs is NA then the mean is / 3 
+
+df_na <- final.beep
+df_na$na_count_neg <- rowSums(is.na(final.beep[c(neg_name)]))
+df_na$na_count_pos <- rowSums(is.na(df_na[c(pos_name)]))
+df_na$na_count_cumu <- rowSums(is.na(df_na[c(cumu_name)]))
+
+final.beep <- df_na 
+
+# Calculating positive and negative mean values for non NA rows (includes partially completed beeps by summing positive and negative items and dividing by the number of non NA observations)
+
+
+final.beep <- final.beep %>%
+  mutate(neg_mean = round(tot_neg / (7 - na_count_neg), digits = 2)) %>%
+  mutate(pos_mean = round(tot_pos / (4 - na_count_pos), digits = 2)) %>%
+  mutate(cumu_mean = (pos_mean - neg_mean)) %>%
+  mutate(total_affect = (cumu_mean))
+
+```
+
+
+
+
+
+```{r}
+#How did participants spend their time?
+
+#Mutating code variables into corresponding words
+
+what.beep <- final.beep %>%
+  mutate(Activity = case_when(What == 1 ~ "Relaxing", 
+                              What == 2 ~ "Work", 
+                              What == 3 ~ "Studying", 
+                              What == 4 ~ "Chores", 
+                              What == 5 ~ "Shopping", 
+                              What == 6 ~ "Hygiene", 
+                              What == 7 ~ "Eating_Drinking", 
+                              What == 8 ~ "Travelling", 
+                              What == 9 ~ "Social_Media", 
+                              What == 10 ~ "Exercising", 
+                              What == 11 ~ "Other_Leisure_Activity", 
+                              What == 98 ~ "Nothing")) %>%
+  mutate(Activity_Type = case_when(What == 1 ~ "Resting", 
+                              What == 2 ~ "Functional", 
+                              What == 3 ~ "Functional", 
+                              What == 4 ~ "Functional", 
+                              What == 5 ~ "Leisure", 
+                              What == 6 ~ "Functional", 
+                              What == 7 ~ "Leisure", 
+                              What == 8 ~ "Leisure", 
+                              What == 9 ~ "Leisure", 
+                              What == 10 ~ "Functional", 
+                              What == 11 ~ "Leisure", 
+                              What == 98 ~ "Nothing"))
+                            
+what.beep <- what.beep %>%
+  mutate(Company = case_when(Who == 1 ~ "Partner", 
+                              Who == 2 ~ "Friends", 
+                              Who == 3 ~ "Family", 
+                              Who == 4 ~ "Colleagues", 
+                              Who == 5 ~ "Acquantainces", 
+                              Who == 6 ~ "Strangers", 
+                              Who == 7 ~ "Nobody")) %>%
+  mutate(Company_type = case_when(Who == 1 ~ "Family or Friends", 
+                              Who == 2 ~ "Family or Friends", 
+                              Who == 3 ~ "Family or Friends", 
+                              Who == 4 ~ "Acquantainces", 
+                              Who == 5 ~ "Acquantainces", 
+                              Who == 6 ~ "Strangers", 
+                              Who == 7 ~ "Nobody"))
+```
+
+
+```{r}
+#Creation of social + activity data
+
+what_activity <- what.beep %>%
+  filter(!is.na(Activity_Type)) %>%
+  group_by(Activity_Type) %>%
+  count() 
+
+what_company <- what.beep %>%
+  filter(!is.na(Company_type)) %>%
+  group_by(Company_type) %>%
+  count()
+
+
+#Percentage of time spent activity type across all ppts and beeps
+CP <- sum(what_company$n)
+AP <- sum(what_activity$n)
+
+activity_pie <- what.beep %>%
+  filter(!is.na(Activity_Type)) %>%
+  group_by(Activity_Type) %>%
+  count() %>%
+  mutate(Percentage = percent(n/AP))
+
+company_pie <- what.beep %>%
+  filter(!is.na(Company_type)) %>%
+  group_by(Company_type) %>%
+  count() %>%
+  mutate(Percentage = percent(n/CP))
+
+
+final.beep <- what.beep
+```
+
+
+
+```{r}
+##Descriptive Statistics
+#write.csv(demo_table_filtered,"C:/Users/Vermani/Desktop/Coursera/Descriptives.csv", row.names = FALSE)
+
+#Tables for further analysis 
+
+an_table1 <- final.beep %>%
+  select(st_subjid, neg_mean, pos_mean, total_affect, Act_enjoy, Anticipation, interest, mfq_tot, asa_tot) %>%
+  group_by(st_subjid) %>%
+  summarize(across(everything(), .f = list(mean = mean, max = max, sd = sd), na.rm = TRUE))
+
+Mfq_asa <- an_table1 %>%
+  select(mfq_tot_mean, asa_tot_mean) %>%
+  summarise(across(everything(), .f = list(mean = mean, max = max, sd = sd), na.rm = TRUE))
+
+an_table2 <- final.beep %>%
+  select(st_subjid, dayno, neg_mean, pos_mean, total_affect, mfq, asa) %>%
+  group_by(st_subjid, dayno) %>%
+ summarize(across(everything(), .f = list(day_mean = mean, day_sd = sd), na.rm = TRUE))
+
+mood_t <- an_table1 %>%
+  mutate(pos_mean = round(pos_mean_mean, 2), 
+         neg_mean = round(neg_mean_mean, 2), 
+         pos_sd = round(pos_mean_sd, 2), 
+         neg_sd = round(pos_mean_sd, 2),
+         cons_mean = round(Act_enjoy_mean, 2), 
+         anticipation_mean = round(Anticipation_mean, 2), 
+         motivation_mean = round(interest_mean, 2))
+         
+    mood_t <- mood_t %>%
+  select(st_subjid, pos_mean, neg_mean, pos_sd,neg_sd, cons_mean, anticipation_mean, motivation_mean)
+
+
+Mood_table <- demo_new %>%
+   left_join(mood_t, by = "st_subjid")
+
+
+Activity_table <- what.beep %>%
+  filter(!is.na(Activity_Type)) %>%
+  group_by(st_subjid, Activity_Type) %>%
+  count()
+
+library(tidyr)
+
+Activity_table2 <- Activity_table %>% 
+  pivot_wider(names_from = Activity_Type, values_from = n)
+
+  
+full_df_demo <- demo_table_filtered %>%
+  left_join(an_table1, by = "st_subjid")
+
+day_demo <- an_table2 %>%
+  left_join(demo_table_filtered,  by = "st_subjid")
+
+```
+
+```{r}
+#Creating lagged variables
+
+final.beep$affect_lag <- lagvar(data = final.beep, x = total_affect, id = st_subjid, lag = 1)
+final.beep$Motivation_lag <- lagvar(Something_else, id = st_subjid, data = final.beep)
+final.beep$Act_future_lag <- lagvar(Act_future, id = st_subjid, data = final.beep) 
+final.beep$Pos_lag <- lagvar(pos_mean, id = st_subjid, data = final.beep)
+final.beep$Neg_lag <- lagvar(neg_mean, id = st_subjid, data = final.beep)
+final.beep$Ant_lag <- lagvar(Anticipation, id = st_subjid, data = final.beep)
+final.beep$Cons_lag <- lagvar(Act_enjoy, id = st_subjid, data = final.beep)
+final.beep$Who_lag <- lagvar(Who_enjoy, id = st_subjid, data = final.beep) 
+final.beep$Who_future_lag <- lagvar(Who_future_enjoy, id = st_subjid, data = final.beep)
+final.beep$Activity_Type_lag <- lagvar(Activity_Type, id = st_subjid, data = final.beep)
+final.beep$Company_lag <- lagvar(Company, id = st_subjid, data = final.beep)
+
+```
+
+
+```{r}
+#H1
+#Correlation between MFQ and negative esm mood
+cor.test(~ mfq + neg_mean, data = Mood_table)
+#Correlation between MFQ and positive ESM mood
+cor.test(~ mfq + pos_mean, data = Mood_table)
+
+
+
+#H2 
+#Model 1 positive mood as outcome, negative mood as predictor
+summary(lmer(pos_mean ~ neg_mean + (neg_mean| pm_ref_label) + (neg_mean| dayno) +  (neg_mean| st_subjid), data = final.beep))
+#Model 2
+summary(lmer(neg_mean ~ pos_mean + (pos_mean | pm_ref_label) + (pos_mean | dayno) +  (pos_mean | st_subjid), data = final.beep))
+
+#H3 within beeps
+
+#Model 3
+summary(lmer(Anticipation ~ pos_mean +  (pos_mean | pm_ref_label) + (pos_mean| dayno) + (pos_mean | st_subjid), data = final.beep))
+
+# Model 4
+summary(lmer(Anticipation ~ pos_mean + neg_mean + Act_enjoy +  (pos_mean + neg_mean + Act_enjoy | pm_ref_label) + (pos_mean + neg_mean + Act_enjoy | dayno) +  (pos_mean + neg_mean + Act_enjoy | st_subjid), data = final.beep))
+
+#Graphic representations of regression model 
+ax <- ggplot(final.beep, aes(x = pos_mean, y = Anticipation)) + 
+  xlab("Current Positive Mood") +
+  ylab("Current Anticipatory Pleasure") +
+  geom_point(alpha = 1/10) + 
+ scale_x_continuous(breaks = seq(0, 7, by = 1))+
+  scale_y_continuous(breaks = seq(0, 7, by = 1)) +
+  geom_smooth(method="lm", color = 'orange') +
+  theme(panel.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(colour = "black"))
+
+
+an <- ggplot(final.beep, aes(x = neg_mean, y = Anticipation)) + 
+  xlab("Current Negative Mood") +
+  ylab("Current Anticipatory Pleasure") +
+  geom_point(alpha = 1/10) + 
+ scale_x_continuous(breaks = seq(0, 7, by = 1))+
+  scale_y_continuous(breaks = seq(0, 7, by = 1)) +
+  geom_smooth(method="lm", color = 'orange') +
+  theme(panel.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(colour = "black"))
+
+
+#H3 data-frame creation by filtering only lagged and unlagged rows with the same activity type 
+split.beep <- final.beep %>%
+  mutate(checking = case_when(Activity_Type == Activity_Type_lag ~ 1)) 
+
+h3.beep <- split.beep %>%
+  filter(checking == 1)
+
+#H4 Time-lagged regression
+#Model 5
+summary(lmer(Act_enjoy ~ Ant_lag + (Ant_lag | pm_ref_label) + (Ant_lag | dayno) +  (Ant_lag | st_subjid), data = h3.beep))
+
+#Model 6
+summary(lmer(Act_enjoy ~ Ant_lag + pos_mean + (Ant_lag + pos_mean | pm_ref_label) + (Ant_lag + pos_mean | dayno) +  (Ant_lag + pos_mean | st_subjid), data = h3.beep))
+
+
+
+
+
+p <- ggplot(h3.beep, aes(x = Ant_lag, y = Act_enjoy)) + 
+  xlab("Lagged Anticipatory Pleasure") +
+  ylab("Current Consummatory Pleasure") +
+  geom_point(alpha = 0.75) + 
+  geom_smooth(method="lm", color = 'orange') +
+            theme(panel.background = element_rect(fill = "white", colour = 'grey'))
+
+t <- ggplot(h3.beep, aes(x = Ant_lag, y = Act_enjoy)) + 
+  xlab("Lagged Anticipatory Pleasure") +
+  ylab("Current Consummatory Pleasure") +
+  geom_point(alpha = 1/10) + 
+  xlim(1,7) +
+  geom_smooth(method="lm", color = 'orange') +
+   geom_rangeframe() + 
+  theme_tufte()
+## Nice plot accounting for overlap (unsure if APA compliant)
+z <- ggplot(h3.beep, aes(x = Ant_lag, y = Act_enjoy)) + 
+  xlab("Lagged Anticipatory Pleasure") +
+  ylab("Current Consummatory Pleasure") +
+  geom_point(alpha = 1/10) + 
+ scale_x_continuous(breaks = seq(1, 7, by = 1))+
+  scale_y_continuous(breaks = seq(1, 7, by = 1)) +
+  geom_smooth(method="lm", color = 'orange') +
+  theme(panel.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(colour = "black"))
+
+```
+
+
+
+```{r}
+# Pie chart of activity 
+library(ggplot2)
+
+p <- ggplot(activity_pie, aes(x = "", y = n, fill = Activity_Type)) +
+  geom_col() +
+  geom_label(aes(label = Percentage),
+             position = position_stack(vjust = 0.5),
+             show.legend = FALSE) +
+  coord_polar(theta = "y") + 
+theme(panel.background = element_blank()) + 
+  theme_void()
+
+#Corrects Legend Title
+p <- p + scale_fill_discrete(name = "Activity Type")
+
+# Pie chart of social engagement 
+
+t <- ggplot(company_pie, aes(x = "", y = n, fill = Company_type)) +
+  geom_col() +
+  geom_label(aes(label = Percentage),
+             position = position_stack(vjust = 0.5),
+             show.legend = FALSE) +
+  coord_polar(theta = "y") + 
+theme(panel.background = element_blank()) + 
+  theme_void()
+#Corrects Legend Title
+t <- t + scale_fill_discrete(name = "Company Type")
+
+
+```
+
+```{r}
+#Packages for power analysis
+# Check if R packages are installed
+
+list.of.packages = c("htmltools","shiny","htmltools","shiny","DT","nlme","ggplot2","gridExtra",
+"data.table","plyr","dplyr","formattable","tidyr","MASS","shinyjs","compiler","future.apply","devtools")
+new.packages = list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+library(htmltools)
+library(shiny)
+library(DT)
+library(nlme)
+library(ggplot2)
+library(gridExtra)
+library(data.table)
+library(plyr)
+library(dplyr)
+library(formattable)
+library(tidyr)
+library(MASS)
+library(shinyjs)
+library(compiler)
+library(future.apply)
+
+library(devtools)
+devtools::install_github("ginettelafit/PowerAnalysisIL", force = T)
+
+library(PowerAnalysisIL)
+
+#Run via the below 
+shiny::runGist('6bac9d35c2521cc4fd91ce4b82490236')
+
+```
+
